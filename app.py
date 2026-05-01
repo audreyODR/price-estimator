@@ -1,47 +1,71 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Roofing Estimator", layout="wide")
+st.set_page_config(page_title="Roofing Quoter Pro", layout="wide")
 
 SHEET_URL = st.secrets["gsheets"]["url"]
 
 @st.cache_data
 def load_data(url):
-    # We skip the first 17 rows to get to the 'LINE ITEM' header on Row 18
-    df = pd.read_csv(url, skiprows=17)
-    return df
+    return pd.read_csv(url, skiprows=17)
 
 df_raw = load_data(SHEET_URL)
 
-st.title("🏠 Roofing Price Estimator")
-
 # --- CLEANING ---
-# Remove rows that are just headers like "ASPHALT SHINGLES" or "PATRIOT"
-# and keep only rows that have a price.
-df = df_raw.dropna(subset=['SELL PRICE'])
+df = df_raw.dropna(subset=['LINE ITEM'])
+df['SELL PRICE'] = pd.to_numeric(df['SELL PRICE'].replace('[\$,]', '', regex=True), errors='coerce')
+df = df.dropna(subset=['SELL PRICE'])
 
-# Clean up the price column (remove $ and commas) so we can do math
-df['SELL PRICE'] = df['SELL PRICE'].replace('[\$,]', '', regex=True).astype(float)
+st.title("🚀 Smart Roofing Quoter")
 
-# --- THE INTERFACE ---
-st.subheader("Estimate Calculator")
-
-col1, col2 = st.columns(2)
-
-with col1:
-    item = st.selectbox("Select Line Item", options=df['LINE ITEM'].unique())
-    quantity = st.number_input("Quantity (Squares/Units)", min_value=1, value=1)
-
-# Pull data for selected item
-selected_row = df[df['LINE ITEM'] == item].iloc[0]
-unit_price = selected_row['SELL PRICE']
-metric = selected_row['ITEM METRIC']
-
-with col2:
-    st.metric("Unit Price", f"${unit_price:,.2f}")
-    total = unit_price * quantity
-    st.header(f"Total: ${total:,.2f}")
-    st.caption(f"Pricing based on {metric}")
+# --- SESSION STATE (The "Shopping Cart") ---
+# This tells the app to remember items even when the page updates
+if 'quote_items' not in st.session_state:
+    st.session_state.quote_items = []
 
 st.divider()
-st.dataframe(df[['LINE ITEM', 'SELL PRICE', 'ITEM METRIC']])
+
+# --- BUILDER INTERFACE ---
+col1, col2 = st.columns([1, 1])
+
+with col1:
+    st.subheader("1. Add Line Items")
+    
+    # Selection
+    item = st.selectbox("Select Material / Service / Add-on", options=df['LINE ITEM'].unique())
+    quantity = st.number_input("Quantity", min_value=0.1, value=1.0, step=0.1)
+    
+    # Lookup price
+    selected_row = df[df['LINE ITEM'] == item].iloc[0]
+    unit_price = selected_row['SELL PRICE']
+    
+    st.info(f"**Unit Price:** ${unit_price:,.2f}")
+    
+    # The Action Button
+    if st.button("➕ Add to Quote", use_container_width=True):
+        st.session_state.quote_items.append({
+            "Item": item,
+            "Quantity": quantity,
+            "Unit Price": unit_price,
+            "Total": quantity * unit_price
+        })
+        st.success(f"Added {item} to quote!")
+
+with col2:
+    st.subheader("2. Current Quote")
+    
+    if len(st.session_state.quote_items) > 0:
+        # Convert our "cart" into a nice table
+        quote_df = pd.DataFrame(st.session_state.quote_items)
+        st.dataframe(quote_df, hide_index=True, use_container_width=True)
+        
+        # Calculate Grand Total
+        grand_total = quote_df['Total'].sum()
+        st.metric("Grand Total", f"${grand_total:,.2f}")
+        
+        # Clear button
+        if st.button("🗑️ Clear Quote"):
+            st.session_state.quote_items = []
+            st.rerun()
+    else:
+        st.caption("Quote is currently empty. Add items from the left.")
