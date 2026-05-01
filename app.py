@@ -1,5 +1,55 @@
 import streamlit as st
 import pandas as pd
+import pdfplumber
+import re
+
+# --- PDF PARSING FUNCTION ---
+def extract_roofr_data(uploaded_file):
+    data = {"sqft": 0.0, "ridges": 0.0}
+    with pdfplumber.open(uploaded_file) as pdf:
+        # Roofr reports usually have the summary table on page 4 or 6
+        for page in pdf.pages:
+            text = page.extract_text()
+            if text:
+                # Look for Total Roof Area (e.g., 3531 sqft)
+                area_match = re.search(r"Total roof area:\s*([\d,]+)", text)
+                if area_match:
+                    data["sqft"] = float(area_match.group(1).replace(',', ''))
+                
+                # Look for Total Ridges (e.g., 129ft 5in)
+                ridge_match = re.search(r"Total ridges\s*,\s*\"?(\d+)ft", text)
+                if ridge_match:
+                    data["ridges"] = float(ridge_match.group(1))
+    return data
+
+# --- UI SETUP ---
+st.title("🚀 Smart Roofing Quoter")
+
+with st.sidebar:
+    st.header("📂 Roofr Integration")
+    uploaded_pdf = st.file_uploader("Upload Roofr PDF", type="pdf")
+    
+    # Auto-parse if file is uploaded
+    parsed_data = {"sqft": 0.0, "ridges": 0.0}
+    if uploaded_pdf:
+        parsed_data = extract_roofr_data(uploaded_pdf)
+        st.success("Data extracted!")
+
+# --- EDITABLE MEASUREMENTS ---
+st.subheader("📏 Project Measurements")
+col1, col2 = st.columns(2)
+
+with col1:
+    # The 'value' is set to the parsed data, but the user can overwrite it
+    sqft = st.number_input("Total Sq Ft", value=parsed_data["sqft"], step=10.0)
+
+with col2:
+    ridges = st.number_input("Total Ridges (ft)", value=parsed_data["ridges"], step=1.0)
+
+# --- PRICING LOGIC ---
+st.divider()
+st.header("2. Add Line Items")
+# Your existing pricing spreadsheet logic goes here, using 'sqft' for calculations!
 
 st.set_page_config(page_title="Roofing Quoter Pro", layout="wide")
 
