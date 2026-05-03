@@ -18,18 +18,15 @@ def load_data(url):
 
 df_raw = load_data(SHEET_URL)
 
-# --- THE FIX: Smarter Data Cleaning ---
-# 1. Only drop rows if the actual Category is completely blank
+# Data Cleaning
 df = df_raw.dropna(subset=['Category']) 
-
-# 2. Force Price, Min, and Max to be strict math numbers, not text!
 df['Price'] = pd.to_numeric(df['Price'].astype(str).replace('[\$,]', '', regex=True), errors='coerce')
+
 if 'Min_Qty' in df.columns:
     df['Min_Qty'] = pd.to_numeric(df['Min_Qty'], errors='coerce')
 if 'Max_Qty' in df.columns:
     df['Max_Qty'] = pd.to_numeric(df['Max_Qty'], errors='coerce')
 
-# 3. Fill in blank options so Python doesn't crash or hide them
 df['Option 1'] = df['Option 1'].fillna('N/A')
 df['Option 2'] = df['Option 2'].fillna('N/A')
 if 'Option 3' in df.columns:
@@ -37,7 +34,7 @@ if 'Option 3' in df.columns:
 if 'Tier_Target' in df.columns:
     df['Tier_Target'] = df['Tier_Target'].fillna('N/A')
 
-df = df.dropna(subset=['Price']) # Only drop if there is NO price attached
+df = df.dropna(subset=['Price']) 
 
 # --- 3. PDF PARSER ---
 def extract_roofr_data(uploaded_file):
@@ -112,7 +109,7 @@ with tab_roof:
         if selected_opt2 != "N/A":
             final_df = final_df[final_df['Option 2'] == selected_opt2]
 
-        # --- THE FIX: Step 4: Pick Option 3 ---
+        # Step 4: Pick Option 3
         if 'Option 3' in final_df.columns:
             opt3_choices = [x for x in final_df['Option 3'].unique() if str(x).strip().upper() != 'N/A' and str(x).strip() != '']
             selected_opt3 = st.selectbox("4. Option 3", opt3_choices) if opt3_choices else "N/A"
@@ -125,65 +122,66 @@ with tab_roof:
     with col2:
         st.subheader("Calculation Details")
         
-        # --- THE INVISIBLE TIER ENGINE ---
-        if 'Tier_Target' in final_df.columns and not final_df.empty:
-            tier_target = str(final_df['Tier_Target'].values[0]).strip()
+        if not final_df.empty:
+            # 1. Identify the calculation type FIRST
+            calc_unit = str(final_df['Measurement'].values[0]).strip() if 'Measurement' in final_df.columns else "Flat Fee"
+            tier_target = str(final_df['Tier_Target'].values[0]).strip() if 'Tier_Target' in final_df.columns else "N/A"
             
+            # 2. ASK FOR THE QUANTITY FIRST so it can drive the math
+            if calc_unit == "Per Square":
+                qty = st.number_input("Squares (Auto-filled but editable)", value=float(base_squares))
+            elif calc_unit == "Per LF":
+                qty = st.number_input("Linear Feet (Auto-filled but editable)", value=float(base_ridges))
+            elif calc_unit == "Flat Fee":
+                qty = 1
+                st.info("Flat fee item. No measurements needed.")
+            else: 
+                qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0)
+                
+            # 3. SET THE TARGET FOR THE INVISIBLE TIER ENGINE
             if tier_target == "Squares":
-                lookup_val = base_squares
+                lookup_val = qty
             elif tier_target == "Pitch":
                 lookup_val = base_pitch
             else:
                 lookup_val = None 
                 
+            # 4. RUN THE INVISIBLE ENGINE
             if lookup_val is not None and 'Min_Qty' in final_df.columns and 'Max_Qty' in final_df.columns:
                 valid_tier = final_df[(final_df['Min_Qty'] <= lookup_val) & (final_df['Max_Qty'] >= lookup_val)]
                 if not valid_tier.empty:
                     final_df = valid_tier
         
-        # --- THE MATH & DISPLAY ---
-        if not final_df.empty:
-            unit_price = final_df['Price'].values[0]
-            calc_unit = final_df['Measurement'].values[0] if 'Measurement' in final_df.columns else "Flat Fee"
-            
-            st.write(f"**Unit Price:** ${unit_price:,.2f} ({calc_unit})")
-            
-            if calc_unit == "Per Square":
-                qty = st.number_input("Squares (Auto-filled)", value=float(base_squares))
-                line_total = unit_price * qty
-            elif calc_unit == "Per LF":
-                qty = st.number_input("Linear Feet (Auto-filled)", value=float(base_ridges))
-                line_total = unit_price * qty
-            elif calc_unit == "Flat Fee":
-                qty = 1
-                st.info("Flat fee item. No measurements needed.")
-                line_total = unit_price
-            else: 
-                qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0)
-                line_total = unit_price * qty
+            # 5. NOW GRAB THE CORRECT PRICE & DISPLAY IT
+            if not final_df.empty:
+                unit_price = final_df['Price'].values[0]
                 
-            st.metric("Line Item Total", f"${line_total:,.2f}")
-            
-            if st.button("➕ Add to Master Quote", use_container_width=True):
-                desc_parts = [str(selected_opt1)]
-                if selected_opt2 != "N/A": desc_parts.append(str(selected_opt2))
-                if selected_opt3 != "N/A": desc_parts.append(str(selected_opt3))
-                item_desc = " - ".join(desc_parts)
+                st.write(f"**Unit Price:** ${unit_price:,.2f} ({calc_unit})")
                 
-                # If there are no options selected (e.g. Steep Pitch with no options), use Category name
-                if item_desc == "N/A" or item_desc == "":
-                    item_desc = selected_category
+                line_total = unit_price * qty
+                st.metric("Line Item Total", f"${line_total:,.2f}")
                 
-                st.session_state.quote_items.append({
-                    "Service": "Roofing",
-                    "Item": item_desc,
-                    "Qty": qty,
-                    "Unit Price": f"${unit_price:,.2f}",
-                    "Total": line_total
-                })
-                st.success(f"Added {item_desc} to quote!")
+                if st.button("➕ Add to Master Quote", use_container_width=True):
+                    desc_parts = [str(selected_opt1)]
+                    if selected_opt2 != "N/A": desc_parts.append(str(selected_opt2))
+                    if selected_opt3 != "N/A": desc_parts.append(str(selected_opt3))
+                    item_desc = " - ".join(desc_parts)
+                    
+                    if item_desc == "N/A" or item_desc == "":
+                        item_desc = selected_category
+                    
+                    st.session_state.quote_items.append({
+                        "Service": "Roofing",
+                        "Item": item_desc,
+                        "Qty": qty,
+                        "Unit Price": f"${unit_price:,.2f}",
+                        "Total": line_total
+                    })
+                    st.success(f"Added {item_desc} to quote!")
+            else:
+                st.warning("Pricing details not found for this measurement tier. Check Min/Max settings.")
         else:
-            st.warning("Pricing details not found for this combination or tier.")
+            st.warning("Pricing details not found for this combination.")
 
 # --- OTHER TABS ---
 with tab_side: st.info("Siding module coming soon...")
