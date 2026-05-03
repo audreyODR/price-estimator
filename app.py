@@ -3,7 +3,6 @@ import pandas as pd
 import pdfplumber
 import re
 
-# This MUST be the first Streamlit command!
 st.set_page_config(page_title="Smart Roofing Quoter Pro", layout="wide")
 
 # --- 1. INITIALIZE THE GLOBAL QUOTE CART ---
@@ -13,35 +12,48 @@ if "quote_items" not in st.session_state:
 # --- 2. GOOGLE SHEETS CONNECTION ---
 SHEET_URL = st.secrets["gsheets"]["url"]
 
-@st.cache_data(ttl=60) # Refreshes data every 60 seconds
+@st.cache_data(ttl=60)
 def load_data(url):
     return pd.read_csv(url)
 
 df_raw = load_data(SHEET_URL)
 
-# Clean the dataframe using the new headers
-df = df_raw.dropna(subset=['Category', 'Option 1'])
-df['Price'] = pd.to_numeric(df['Price'].astype(str).replace('[\$,]', '', regex=True), errors='coerce')
-df = df.dropna(subset=['Price'])
+# --- THE FIX: Smarter Data Cleaning ---
+# 1. Only drop rows if the actual Category is completely blank
+df = df_raw.dropna(subset=['Category']) 
 
-# --- 3. PDF PARSER (Now with Pitch!) ---
+# 2. Force Price, Min, and Max to be strict math numbers, not text!
+df['Price'] = pd.to_numeric(df['Price'].astype(str).replace('[\$,]', '', regex=True), errors='coerce')
+if 'Min_Qty' in df.columns:
+    df['Min_Qty'] = pd.to_numeric(df['Min_Qty'], errors='coerce')
+if 'Max_Qty' in df.columns:
+    df['Max_Qty'] = pd.to_numeric(df['Max_Qty'], errors='coerce')
+
+# 3. Fill in blank options so Python doesn't crash or hide them
+df['Option 1'] = df['Option 1'].fillna('N/A')
+df['Option 2'] = df['Option 2'].fillna('N/A')
+if 'Option 3' in df.columns:
+    df['Option 3'] = df['Option 3'].fillna('N/A')
+if 'Tier_Target' in df.columns:
+    df['Tier_Target'] = df['Tier_Target'].fillna('N/A')
+
+df = df.dropna(subset=['Price']) # Only drop if there is NO price attached
+
+# --- 3. PDF PARSER ---
 def extract_roofr_data(uploaded_file):
     data = {"sqft": 0.0, "ridges": 0.0, "pitch": 0.0}
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
             text = page.extract_text()
             if text:
-                # Extract Square Footage
                 area_match = re.search(r"Total roof area:\s*([\d,]+)", text)
                 if area_match:
                     data["sqft"] = float(area_match.group(1).replace(',', ''))
                 
-                # Extract Ridges
                 ridge_match = re.search(r"ridges[^\d]*(\d+)", text.lower())
                 if ridge_match:
                     data["ridges"] = float(ridge_match.group(1))
                     
-                # Extract Pitch (e.g., "Predominant pitch 7/12")
                 pitch_match = re.search(r"pitch\s*[:]?\s*(\d+)/12", text.lower())
                 if pitch_match:
                     data["pitch"] = float(pitch_match.group(1))
@@ -63,7 +75,6 @@ with st.sidebar:
     base_ridges = st.number_input("Total Ridges (ft)", value=parsed_data["ridges"], step=1.0)
     base_pitch = st.number_input("Predominant Pitch (X/12)", value=parsed_data["pitch"], step=1.0)
     
-    # Calculate base squares automatically
     base_squares = base_sqft / 100
 
 # --- 5. THE SERVICE TABS ---
@@ -86,17 +97,30 @@ with tab_roof:
         
         # Step 2: Pick Option 1
         filtered_df = df[df['Category'] == selected_category]
-        items = filtered_df['Option 1'].unique()
-        selected_opt1 = st.selectbox("2. Option 1", items)
+        opt1_choices = [x for x in filtered_df['Option 1'].unique() if str(x).strip().upper() != 'N/A' and str(x).strip() != '']
+        selected_opt1 = st.selectbox("2. Option 1", opt1_choices) if opt1_choices else "N/A"
         
+        if selected_opt1 != "N/A":
+            final_df = filtered_df[filtered_df['Option 1'] == selected_opt1]
+        else:
+            final_df = filtered_df[filtered_df['Option 1'] == 'N/A']
+            
         # Step 3: Pick Option 2
-        final_df = filtered_df[filtered_df['Option 1'] == selected_opt1]
-        
-        opt2_choices = [x for x in final_df['Option 2'].unique() if pd.notna(x) and str(x).strip().upper() != 'N/A' and str(x).strip() != '']
+        opt2_choices = [x for x in final_df['Option 2'].unique() if str(x).strip().upper() != 'N/A' and str(x).strip() != '']
         selected_opt2 = st.selectbox("3. Option 2", opt2_choices) if opt2_choices else "N/A"
         
         if selected_opt2 != "N/A":
             final_df = final_df[final_df['Option 2'] == selected_opt2]
+
+        # --- THE FIX: Step 4: Pick Option 3 ---
+        if 'Option 3' in final_df.columns:
+            opt3_choices = [x for x in final_df['Option 3'].unique() if str(x).strip().upper() != 'N/A' and str(x).strip() != '']
+            selected_opt3 = st.selectbox("4. Option 3", opt3_choices) if opt3_choices else "N/A"
+            
+            if selected_opt3 != "N/A":
+                final_df = final_df[final_df['Option 3'] == selected_opt3]
+        else:
+            selected_opt3 = "N/A"
 
     with col2:
         st.subheader("Calculation Details")
@@ -105,15 +129,13 @@ with tab_roof:
         if 'Tier_Target' in final_df.columns and not final_df.empty:
             tier_target = str(final_df['Tier_Target'].values[0]).strip()
             
-            # Determine which measurement to check against the Min/Max limits
             if tier_target == "Squares":
                 lookup_val = base_squares
             elif tier_target == "Pitch":
                 lookup_val = base_pitch
             else:
-                lookup_val = None # No volume tiers needed
+                lookup_val = None 
                 
-            # If a lookup value exists, secretly filter the dataframe to the correct tier row!
             if lookup_val is not None and 'Min_Qty' in final_df.columns and 'Max_Qty' in final_df.columns:
                 valid_tier = final_df[(final_df['Min_Qty'] <= lookup_val) & (final_df['Max_Qty'] >= lookup_val)]
                 if not valid_tier.empty:
@@ -127,26 +149,30 @@ with tab_roof:
             st.write(f"**Unit Price:** ${unit_price:,.2f} ({calc_unit})")
             
             if calc_unit == "Per Square":
-                qty = st.number_input("Squares (Auto-filled but editable)", value=float(base_squares))
+                qty = st.number_input("Squares (Auto-filled)", value=float(base_squares))
                 line_total = unit_price * qty
             elif calc_unit == "Per LF":
-                qty = st.number_input("Linear Feet (Auto-filled but editable)", value=float(base_ridges))
+                qty = st.number_input("Linear Feet (Auto-filled)", value=float(base_ridges))
                 line_total = unit_price * qty
             elif calc_unit == "Flat Fee":
                 qty = 1
                 st.info("Flat fee item. No measurements needed.")
                 line_total = unit_price
-            else: # "Per Item" fallback
+            else: 
                 qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0)
                 line_total = unit_price * qty
                 
             st.metric("Line Item Total", f"${line_total:,.2f}")
             
-            # Add to Cart Button
             if st.button("➕ Add to Master Quote", use_container_width=True):
                 desc_parts = [str(selected_opt1)]
                 if selected_opt2 != "N/A": desc_parts.append(str(selected_opt2))
+                if selected_opt3 != "N/A": desc_parts.append(str(selected_opt3))
                 item_desc = " - ".join(desc_parts)
+                
+                # If there are no options selected (e.g. Steep Pitch with no options), use Category name
+                if item_desc == "N/A" or item_desc == "":
+                    item_desc = selected_category
                 
                 st.session_state.quote_items.append({
                     "Service": "Roofing",
@@ -157,9 +183,9 @@ with tab_roof:
                 })
                 st.success(f"Added {item_desc} to quote!")
         else:
-            st.warning("Pricing details not found for this combination or measurement tier.")
+            st.warning("Pricing details not found for this combination or tier.")
 
-# --- PLACEHOLDERS FOR OTHER TABS ---
+# --- OTHER TABS ---
 with tab_side: st.info("Siding module coming soon...")
 with tab_gut: st.info("Gutters module coming soon...")
 with tab_win: st.info("Windows module coming soon...")
