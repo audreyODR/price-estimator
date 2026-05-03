@@ -14,7 +14,10 @@ SHEET_URL = st.secrets["gsheets"]["url"]
 
 @st.cache_data(ttl=60)
 def load_data(url):
-    return pd.read_csv(url)
+    df_temp = pd.read_csv(url)
+    # Strip any accidental spaces from column headers
+    df_temp.columns = df_temp.columns.str.strip()
+    return df_temp
 
 df_raw = load_data(SHEET_URL)
 
@@ -123,40 +126,44 @@ with tab_roof:
         st.subheader("Calculation Details")
         
         if not final_df.empty:
-            # 1. Identify the calculation type FIRST
-            calc_unit = str(final_df['Measurement'].values[0]).strip() if 'Measurement' in final_df.columns else "Flat Fee"
-            tier_target = str(final_df['Tier_Target'].values[0]).strip() if 'Tier_Target' in final_df.columns else "N/A"
+            # 1. Grab raw strings from Google Sheet, then force to lowercase for "fuzzy" matching
+            raw_calc_unit = str(final_df['Measurement'].values[0]).strip() if 'Measurement' in final_df.columns else "Flat Fee"
+            calc_unit_lower = raw_calc_unit.lower()
             
-            # 2. ASK FOR THE QUANTITY FIRST so it can drive the math
-            if calc_unit == "Per Square":
+            raw_tier_target = str(final_df['Tier_Target'].values[0]).strip() if 'Tier_Target' in final_df.columns else "N/A"
+            tier_target_lower = raw_tier_target.lower()
+            
+            # 2. ASK FOR QUANTITY (Using fuzzy matching so "per SQ" or "Per Square" both work!)
+            if "sq" in calc_unit_lower or "square" in calc_unit_lower:
                 qty = st.number_input("Squares (Auto-filled but editable)", value=float(base_squares))
-            elif calc_unit == "Per LF":
+            elif "lf" in calc_unit_lower or "linear" in calc_unit_lower:
                 qty = st.number_input("Linear Feet (Auto-filled but editable)", value=float(base_ridges))
-            elif calc_unit == "Flat Fee":
+            elif "flat" in calc_unit_lower:
                 qty = 1
                 st.info("Flat fee item. No measurements needed.")
             else: 
                 qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0)
                 
             # 3. SET THE TARGET FOR THE INVISIBLE TIER ENGINE
-            if tier_target == "Squares":
+            if "sq" in tier_target_lower:
                 lookup_val = qty
-            elif tier_target == "Pitch":
+            elif "pitch" in tier_target_lower:
                 lookup_val = base_pitch
             else:
                 lookup_val = None 
                 
-            # 4. RUN THE INVISIBLE ENGINE
+            # 4. RUN THE INVISIBLE TIER ENGINE
             if lookup_val is not None and 'Min_Qty' in final_df.columns and 'Max_Qty' in final_df.columns:
                 valid_tier = final_df[(final_df['Min_Qty'] <= lookup_val) & (final_df['Max_Qty'] >= lookup_val)]
                 if not valid_tier.empty:
                     final_df = valid_tier
         
-            # 5. NOW GRAB THE CORRECT PRICE & DISPLAY IT
+            # 5. NOW GRAB THE CORRECT TIER PRICE & DISPLAY IT
             if not final_df.empty:
                 unit_price = final_df['Price'].values[0]
                 
-                st.write(f"**Unit Price:** ${unit_price:,.2f} ({calc_unit})")
+                # Show the exact spelling you used in your Google Sheet
+                st.write(f"**Unit Price:** ${unit_price:,.2f} ({raw_calc_unit})")
                 
                 line_total = unit_price * qty
                 st.metric("Line Item Total", f"${line_total:,.2f}")
@@ -179,7 +186,7 @@ with tab_roof:
                     })
                     st.success(f"Added {item_desc} to quote!")
             else:
-                st.warning("Pricing details not found for this measurement tier. Check Min/Max settings.")
+                st.warning("Pricing details not found for this measurement tier. Check your Min/Max spreadsheet settings for gaps.")
         else:
             st.warning("Pricing details not found for this combination.")
 
