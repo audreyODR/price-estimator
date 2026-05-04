@@ -14,11 +14,16 @@ SHEET_URL = st.secrets["gsheets"]["url"]
 
 @st.cache_data(ttl=60)
 def load_all_sheets(url):
-    # Convert standard sharing URL into an Excel export URL to grab ALL tabs
-    export_url = re.sub(r'/edit.*$', '/export?format=xlsx', url)
+    # Safely extract the Sheet ID no matter how the URL is formatted in your secrets
+    match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
+    if match:
+        sheet_id = match.group(1)
+        export_url = f"https://docs.google.com/spreadsheets/d/{sheet_id}/export?format=xlsx"
+    else:
+        export_url = url # Fallback
     
-    # Read the whole workbook
-    xls = pd.read_excel(export_url, sheet_name=None)
+    # Read the whole workbook explicitly using openpyxl
+    xls = pd.read_excel(export_url, sheet_name=None, engine='openpyxl')
     cleaned_sheets = {}
     
     for sheet_name, df_raw in xls.items():
@@ -70,7 +75,6 @@ def extract_roofr_data(uploaded_file):
                         except: return 0.0
                     return None
 
-                # By forcing it to look for "total ___", it ignores the material summary page combinations!
                 v = get_val(r"total roof area.*?(?:\"|:)\s*([\d,o]+)")
                 if v is not None: data["sqft"] = v
                 
@@ -193,7 +197,6 @@ def render_quoting_interface(service_name, df, meas_dict, key_prefix):
             
             # --- SMART ROUTING LOGIC ---
             if service_name == "Gutters":
-                # Gutters logic: All LF is driven exclusively by Eaves!
                 if "lf" in calc_unit_lower or "linear" in calc_unit_lower:
                     qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key_prefix}_qty_gut_lf")
                 elif "sq" in calc_unit_lower:
@@ -205,7 +208,6 @@ def render_quoting_interface(service_name, df, meas_dict, key_prefix):
                     qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0, key=f"{key_prefix}_qty_gut_std")
             
             else:
-                # Roofing Logic
                 if "sq" in calc_unit_lower or "square" in calc_unit_lower:
                     if "shingle" in cat_lower or "layer removal" in cat_lower or "plywood" in cat_lower:
                         qty = st.number_input("Squares (Complex Buffer Math)", value=float(meas_dict["complex_squares"]), key=f"{key_prefix}_qty_csq")
@@ -230,7 +232,6 @@ def render_quoting_interface(service_name, df, meas_dict, key_prefix):
                 else: 
                     qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0, key=f"{key_prefix}_qty_std")
                 
-            # INVISIBLE TIER ENGINE
             if "sq" in tier_target_lower:
                 lookup_val = qty
             elif "pitch" in tier_target_lower:
@@ -242,7 +243,6 @@ def render_quoting_interface(service_name, df, meas_dict, key_prefix):
                 valid_tier = final_df[(final_df['Min_Qty'] <= lookup_val) & (final_df['Max_Qty'] >= lookup_val)]
                 if not valid_tier.empty: final_df = valid_tier
         
-            # MATH & DISPLAY
             if not final_df.empty:
                 unit_price = final_df['Price'].values[0]
                 st.write(f"**Unit Price:** ${unit_price:,.2f} ({raw_calc_unit})")
@@ -274,9 +274,7 @@ tab_roof, tab_side, tab_gut, tab_win, tab_ins, tab_srv = st.tabs([
     "Roofing", "Siding", "Gutters", "Windows/Doors", "Insulation", "Service"
 ])
 
-# Deploy the Reusable Form Engine
 with tab_roof:
-    # Try fetching the sheet by common names
     df_roof = all_sheets.get("Roofing", all_sheets.get("Sheet1", pd.DataFrame()))
     render_quoting_interface("Roofing", df_roof, meas, "roof")
 
@@ -284,7 +282,6 @@ with tab_gut:
     df_gut = all_sheets.get("Gutters", all_sheets.get("Gutter", pd.DataFrame()))
     render_quoting_interface("Gutters", df_gut, meas, "gut")
 
-# Placeholders for future modules
 with tab_side: st.info("Siding module coming soon...")
 with tab_win: st.info("Windows module coming soon...")
 with tab_ins: st.info("Insulation module coming soon...")
