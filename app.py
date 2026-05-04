@@ -9,36 +9,48 @@ st.set_page_config(page_title="Smart Roofing Quoter Pro", layout="wide")
 if "quote_items" not in st.session_state:
     st.session_state.quote_items = []
 
-# --- 2. GOOGLE SHEETS CONNECTION ---
+# --- 2. GOOGLE SHEETS CONNECTION (NOW MULTI-TAB!) ---
 SHEET_URL = st.secrets["gsheets"]["url"]
 
 @st.cache_data(ttl=60)
-def load_data(url):
-    df_temp = pd.read_csv(url)
-    df_temp.columns = df_temp.columns.str.strip()
-    return df_temp
+def load_all_sheets(url):
+    # Convert standard sharing URL into an Excel export URL to grab ALL tabs
+    export_url = re.sub(r'/edit.*$', '/export?format=xlsx', url)
+    
+    # Read the whole workbook
+    xls = pd.read_excel(export_url, sheet_name=None)
+    cleaned_sheets = {}
+    
+    for sheet_name, df_raw in xls.items():
+        df_raw.columns = df_raw.columns.str.strip()
+        if 'Category' not in df_raw.columns:
+            continue # Skip tabs that don't have our pricing headers
+            
+        df = df_raw.dropna(subset=['Category']) 
+        if 'Price' in df.columns:
+            df['Price'] = pd.to_numeric(df['Price'].astype(str).replace('[\$,]', '', regex=True), errors='coerce')
+            df = df.dropna(subset=['Price']) 
+        
+        if 'Min_Qty' in df.columns:
+            df['Min_Qty'] = pd.to_numeric(df['Min_Qty'], errors='coerce')
+        if 'Max_Qty' in df.columns:
+            df['Max_Qty'] = pd.to_numeric(df['Max_Qty'], errors='coerce')
 
-df_raw = load_data(SHEET_URL)
+        df['Option 1'] = df['Option 1'].fillna('N/A') if 'Option 1' in df.columns else 'N/A'
+        df['Option 2'] = df['Option 2'].fillna('N/A') if 'Option 2' in df.columns else 'N/A'
+        if 'Option 3' in df.columns:
+            df['Option 3'] = df['Option 3'].fillna('N/A')
+        if 'Tier_Target' in df.columns:
+            df['Tier_Target'] = df['Tier_Target'].fillna('N/A')
+            
+        cleaned_sheets[sheet_name.strip()] = df
+        
+    return cleaned_sheets
 
-# Data Cleaning
-df = df_raw.dropna(subset=['Category']) 
-df['Price'] = pd.to_numeric(df['Price'].astype(str).replace('[\$,]', '', regex=True), errors='coerce')
+# Load all tabs into a dictionary
+all_sheets = load_all_sheets(SHEET_URL)
 
-if 'Min_Qty' in df.columns:
-    df['Min_Qty'] = pd.to_numeric(df['Min_Qty'], errors='coerce')
-if 'Max_Qty' in df.columns:
-    df['Max_Qty'] = pd.to_numeric(df['Max_Qty'], errors='coerce')
-
-df['Option 1'] = df['Option 1'].fillna('N/A')
-df['Option 2'] = df['Option 2'].fillna('N/A')
-if 'Option 3' in df.columns:
-    df['Option 3'] = df['Option 3'].fillna('N/A')
-if 'Tier_Target' in df.columns:
-    df['Tier_Target'] = df['Tier_Target'].fillna('N/A')
-
-df = df.dropna(subset=['Price']) 
-
-# --- 3. THE "SUPER" PDF PARSER ---
+# --- 3. THE FIXED PDF PARSER ---
 def extract_roofr_data(uploaded_file):
     data = {
         "sqft": 0.0, "flat": 0.0, "pitch": 0.0,
@@ -58,34 +70,35 @@ def extract_roofr_data(uploaded_file):
                         except: return 0.0
                     return None
 
+                # By forcing it to look for "total ___", it ignores the material summary page combinations!
                 v = get_val(r"total roof area.*?(?:\"|:)\s*([\d,o]+)")
                 if v is not None: data["sqft"] = v
                 
-                v = get_val(r"flat (?:roof )?area.*?(?:\"|:)\s*([\d,o]+)")
+                v = get_val(r"total flat.*?(?:\"|:)\s*([\d,o]+)")
                 if v is not None: data["flat"] = v
                 
-                v = get_val(r"pitch\s*[:]?\s*(\d+)/12")
+                v = get_val(r"predominant pitch\s*[:]?\s*(\d+)/12")
                 if v is not None: data["pitch"] = v
                     
-                v = get_val(r"ridges[^\d,o]*([\d,o]+)")
+                v = get_val(r"total ridges\s*.*?([\d,o]+)")
                 if v is not None: data["ridges"] = v
                     
-                v = get_val(r"hips[^\d,o]*([\d,o]+)")
+                v = get_val(r"total hips\s*.*?([\d,o]+)")
                 if v is not None: data["hips"] = v
                     
-                v = get_val(r"valleys[^\d,o]*([\d,o]+)")
+                v = get_val(r"total valleys\s*.*?([\d,o]+)")
                 if v is not None: data["valleys"] = v
                     
-                v = get_val(r"eaves[^\d,o]*([\d,o]+)")
+                v = get_val(r"total eaves\s*.*?([\d,o]+)")
                 if v is not None: data["eaves"] = v
                     
-                v = get_val(r"rakes[^\d,o]*([\d,o]+)")
+                v = get_val(r"total rakes\s*.*?([\d,o]+)")
                 if v is not None: data["rakes"] = v
                     
-                v = get_val(r"wall flashing[^\d,o]*([\d,o]+)")
+                v = get_val(r"total wall flashing\s*.*?([\d,o]+)")
                 if v is not None: data["wall_flash"] = v
                     
-                v = get_val(r"step flashing[^\d,o]*([\d,o]+)")
+                v = get_val(r"total step flashing\s*.*?([\d,o]+)")
                 if v is not None: data["step_flash"] = v
                 
     return data
@@ -98,7 +111,7 @@ with st.sidebar:
     parsed_data = {"sqft": 0.0, "flat": 0.0, "pitch": 0.0, "ridges": 0.0, "hips": 0.0, "valleys": 0.0, "eaves": 0.0, "rakes": 0.0, "wall_flash": 0.0, "step_flash": 0.0}
     if uploaded_pdf:
         parsed_data = extract_roofr_data(uploaded_pdf)
-        st.success("All complex measurements extracted!")
+        st.success("All complex measurements extracted perfectly!")
     
     st.divider()
     st.subheader("📏 Base Measurements")
@@ -129,9 +142,8 @@ with st.sidebar:
 
     st.divider()
     st.subheader("📐 Calculated Squares")
-    st.info(f"**Base Roof:** {base_squares:,.2f} SQ\n\n**Complex (with buffer/starter):** {complex_squares:,.2f} SQ")
+    st.info(f"**Base Roof:** {base_squares:,.2f} SQ\n\n**Complex (w/ starter buffer):** {complex_squares:,.2f} SQ")
 
-# Package measurements for the routing engine
 meas = {
     "base_squares": base_squares, "flat_squares": flat_squares, "complex_squares": complex_squares,
     "base_valleys": base_valleys, "base_eaves": base_eaves, "total_flashing": total_flashing,
@@ -139,8 +151,11 @@ meas = {
 }
 
 # --- 5. THE REUSABLE FORM ENGINE ---
-# This function lets us generate the quoting form on ANY tab perfectly!
 def render_quoting_interface(service_name, df, meas_dict, key_prefix):
+    if df.empty:
+        st.error(f"⚠️ Could not find data for the **{service_name}** tab. Make sure your Google Sheet has a tab named exactly '{service_name}'.")
+        return
+
     st.header(f"Build {service_name} Quote")
     
     col1, col2 = st.columns(2)
@@ -177,29 +192,43 @@ def render_quoting_interface(service_name, df, meas_dict, key_prefix):
             cat_lower = str(selected_category).lower()
             
             # --- SMART ROUTING LOGIC ---
-            if "sq" in calc_unit_lower or "square" in calc_unit_lower:
-                if "shingle" in cat_lower or "layer removal" in cat_lower or "plywood" in cat_lower:
-                    qty = st.number_input("Squares (Complex Buffer Math)", value=float(meas_dict["complex_squares"]), key=f"{key_prefix}_qty_csq")
-                elif "low slope" in cat_lower or "flat" in cat_lower:
-                    qty = st.number_input("Squares (Flat Area)", value=float(meas_dict["flat_squares"]), key=f"{key_prefix}_qty_fsq")
-                else:
-                    qty = st.number_input("Squares (Base Roof Area)", value=float(meas_dict["base_squares"]), key=f"{key_prefix}_qty_bsq")
-                    
-            elif "lf" in calc_unit_lower or "linear" in calc_unit_lower:
-                if "valley" in cat_lower:
-                    qty = st.number_input("Linear Feet (Valleys)", value=float(meas_dict["base_valleys"]), key=f"{key_prefix}_qty_val")
-                elif "smartvent" in cat_lower or "smart vent" in cat_lower:
-                    qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key_prefix}_qty_eav")
-                elif "flashing" in cat_lower or "wall" in cat_lower or "step" in cat_lower:
-                    qty = st.number_input("Linear Feet (Wall + Step)", value=float(meas_dict["total_flashing"]), key=f"{key_prefix}_qty_flash")
-                else:
-                    qty = st.number_input("Linear Feet (Ridges)", value=float(meas_dict["base_ridges"]), key=f"{key_prefix}_qty_ridge")
-                    
-            elif "flat" in calc_unit_lower:
-                qty = 1
-                st.info("Flat fee item. No measurements needed.")
-            else: 
-                qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0, key=f"{key_prefix}_qty_std")
+            if service_name == "Gutters":
+                # Gutters logic: All LF is driven exclusively by Eaves!
+                if "lf" in calc_unit_lower or "linear" in calc_unit_lower:
+                    qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key_prefix}_qty_gut_lf")
+                elif "sq" in calc_unit_lower:
+                    qty = st.number_input("Squares", value=float(meas_dict["base_squares"]), key=f"{key_prefix}_qty_gut_sq")
+                elif "flat" in calc_unit_lower:
+                    qty = 1
+                    st.info("Flat fee item. No measurements needed.")
+                else: 
+                    qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0, key=f"{key_prefix}_qty_gut_std")
+            
+            else:
+                # Roofing Logic
+                if "sq" in calc_unit_lower or "square" in calc_unit_lower:
+                    if "shingle" in cat_lower or "layer removal" in cat_lower or "plywood" in cat_lower:
+                        qty = st.number_input("Squares (Complex Buffer Math)", value=float(meas_dict["complex_squares"]), key=f"{key_prefix}_qty_csq")
+                    elif "low slope" in cat_lower or "flat" in cat_lower:
+                        qty = st.number_input("Squares (Flat Area)", value=float(meas_dict["flat_squares"]), key=f"{key_prefix}_qty_fsq")
+                    else:
+                        qty = st.number_input("Squares (Base Roof Area)", value=float(meas_dict["base_squares"]), key=f"{key_prefix}_qty_bsq")
+                        
+                elif "lf" in calc_unit_lower or "linear" in calc_unit_lower:
+                    if "valley" in cat_lower:
+                        qty = st.number_input("Linear Feet (Valleys)", value=float(meas_dict["base_valleys"]), key=f"{key_prefix}_qty_val")
+                    elif "smartvent" in cat_lower or "smart vent" in cat_lower:
+                        qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key_prefix}_qty_eav")
+                    elif "flashing" in cat_lower or "wall" in cat_lower or "step" in cat_lower:
+                        qty = st.number_input("Linear Feet (Wall + Step)", value=float(meas_dict["total_flashing"]), key=f"{key_prefix}_qty_flash")
+                    else:
+                        qty = st.number_input("Linear Feet (Ridges)", value=float(meas_dict["base_ridges"]), key=f"{key_prefix}_qty_ridge")
+                        
+                elif "flat" in calc_unit_lower:
+                    qty = 1
+                    st.info("Flat fee item. No measurements needed.")
+                else: 
+                    qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0, key=f"{key_prefix}_qty_std")
                 
             # INVISIBLE TIER ENGINE
             if "sq" in tier_target_lower:
@@ -245,12 +274,15 @@ tab_roof, tab_side, tab_gut, tab_win, tab_ins, tab_srv = st.tabs([
     "Roofing", "Siding", "Gutters", "Windows/Doors", "Insulation", "Service"
 ])
 
-# Deploy the Reusable Form Engine to the active tabs!
+# Deploy the Reusable Form Engine
 with tab_roof:
-    render_quoting_interface("Roofing", df, meas, "roof")
+    # Try fetching the sheet by common names
+    df_roof = all_sheets.get("Roofing", all_sheets.get("Sheet1", pd.DataFrame()))
+    render_quoting_interface("Roofing", df_roof, meas, "roof")
 
 with tab_gut:
-    render_quoting_interface("Gutters", df, meas, "gut")
+    df_gut = all_sheets.get("Gutters", all_sheets.get("Gutter", pd.DataFrame()))
+    render_quoting_interface("Gutters", df_gut, meas, "gut")
 
 # Placeholders for future modules
 with tab_side: st.info("Siding module coming soon...")
@@ -265,7 +297,6 @@ st.header("🛒 Current Master Quote")
 if len(st.session_state.quote_items) > 0:
     cart_df = pd.DataFrame(st.session_state.quote_items)
     
-    # Format the Total column specifically as Currency
     st.dataframe(
         cart_df, 
         hide_index=True, 
