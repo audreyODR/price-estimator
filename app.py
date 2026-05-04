@@ -160,22 +160,37 @@ def render_interface(service, df, meas_dict, key):
         
     with c2:
         if not f.empty:
-            # THE SAFETY NET FIX: Safely retrieve calculation metrics even if the columns are missing
             m_type = str(f['Measurement'].values[0]).lower() if 'Measurement' in f.columns else "flat fee"
             t_target = str(f['Tier_Target'].values[0]).lower() if 'Tier_Target' in f.columns else "n/a"
+            cat_lower = str(cat).lower()
             
-            # Smart Routing
-            if "sq" in m_type:
-                if any(x in cat.lower() for x in ["shingle", "removal", "plywood"]):
-                    qty = st.number_input("Squares (Complex Buffer)", value=float(meas_dict["complex_squares"]), key=f"{key}_q_c")
-                elif "low slope" in cat.lower():
-                    qty = st.number_input("Squares (Flat Area)", value=float(meas_dict["flat_squares"]), key=f"{key}_q_f")
-                else: qty = st.number_input("Squares", value=float(meas_dict["base_squares"]), key=f"{key}_q_b")
-            elif "lf" in m_type:
-                if service == "Gutters": qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key}_q_g")
-                elif "valley" in cat.lower(): qty = st.number_input("Linear Feet (Valleys)", value=float(meas_dict["base_valleys"]), key=f"{key}_q_v")
-                else: qty = st.number_input("Linear Feet", value=float(meas_dict["base_ridges"]), key=f"{key}_q_r")
-            else: qty = st.number_input("Quantity", min_value=1.0, value=1.0, key=f"{key}_q_s")
+            # THE FIX: Dynamic keys attached to the math force the box to reset when data changes!
+            if "sq" in m_type or "square" in m_type:
+                if any(x in cat_lower for x in ["shingle", "removal", "plywood"]):
+                    qty = st.number_input("Squares (Complex Buffer)", value=float(meas_dict["complex_squares"]), key=f"{key}_csq_{meas_dict['complex_squares']}")
+                elif "low slope" in cat_lower or "flat" in cat_lower:
+                    qty = st.number_input("Squares (Flat Area)", value=float(meas_dict["flat_squares"]), key=f"{key}_fsq_{meas_dict['flat_squares']}")
+                else: 
+                    qty = st.number_input("Squares (Base Roof)", value=float(meas_dict["base_squares"]), key=f"{key}_bsq_{meas_dict['base_squares']}")
+            
+            elif "lf" in m_type or "linear" in m_type:
+                if service == "Gutters": 
+                    qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key}_geav_{meas_dict['base_eaves']}")
+                elif "valley" in cat_lower: 
+                    qty = st.number_input("Linear Feet (Valleys)", value=float(meas_dict["base_valleys"]), key=f"{key}_val_{meas_dict['base_valleys']}")
+                elif any(x in cat_lower for x in ["smartvent", "smart vent", "edge"]): 
+                    qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key}_eav_{meas_dict['base_eaves']}")
+                elif any(x in cat_lower for x in ["flashing", "wall", "step", "counter"]): 
+                    qty = st.number_input("Linear Feet (Wall + Step)", value=float(meas_dict["total_flashing"]), key=f"{key}_fla_{meas_dict['total_flashing']}")
+                else: 
+                    qty = st.number_input("Linear Feet (Ridges)", value=float(meas_dict["base_ridges"]), key=f"{key}_rid_{meas_dict['base_ridges']}")
+            
+            elif "flat" in m_type:
+                qty = 1
+                st.info("Flat fee item. No measurements needed.")
+            
+            else: 
+                qty = st.number_input("Quantity", min_value=1.0, value=1.0, key=f"{key}_std_{meas_dict['base_squares']}")
             
             # Tier Logic
             lookup = qty if "sq" in t_target else meas_dict["base_pitch"] if "pitch" in t_target else None
