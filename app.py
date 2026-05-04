@@ -40,7 +40,6 @@ df = df.dropna(subset=['Price'])
 
 # --- 3. THE "SUPER" PDF PARSER ---
 def extract_roofr_data(uploaded_file):
-    # Initialize all measurements to 0
     data = {
         "sqft": 0.0, "flat": 0.0, "pitch": 0.0,
         "ridges": 0.0, "hips": 0.0, "valleys": 0.0,
@@ -51,7 +50,6 @@ def extract_roofr_data(uploaded_file):
         for page in pdf.pages:
             text = page.extract_text().lower()
             if text:
-                # Helper function to catch numbers (and OCR errors where '0' is read as 'o')
                 def get_val(pattern):
                     match = re.search(pattern, text)
                     if match:
@@ -60,7 +58,6 @@ def extract_roofr_data(uploaded_file):
                         except: return 0.0
                     return None
 
-                # Only update if found, to prevent overwriting with blanks
                 v = get_val(r"total roof area.*?(?:\"|:)\s*([\d,o]+)")
                 if v is not None: data["sqft"] = v
                 
@@ -106,12 +103,10 @@ with st.sidebar:
     st.divider()
     st.subheader("📏 Base Measurements")
     
-    # Area & Pitch
     base_sqft = st.number_input("Total Sq Ft", value=parsed_data["sqft"], step=10.0)
     base_flat = st.number_input("Flat Roof Sq Ft", value=parsed_data["flat"], step=10.0)
     base_pitch = st.number_input("Predominant Pitch (X/12)", value=parsed_data["pitch"], step=1.0)
     
-    # Linear measurements in columns to save space
     st.markdown("**Linear Measurements (ft)**")
     colA, colB = st.columns(2)
     with colA:
@@ -129,40 +124,43 @@ with st.sidebar:
     flat_squares = base_flat / 100
     total_flashing = base_wall + base_step
     
-    # The Buffer Formula for Shingles/Plywood/Removal
     buffer_sqft = base_sqft + base_hips + base_ridges + base_valleys + ((base_eaves + base_rakes) / 100)
     complex_squares = buffer_sqft / 100
 
-# --- 5. THE SERVICE TABS ---
-st.title("🚀 Smart Roofing Quoter Pro")
+    st.divider()
+    st.subheader("📐 Calculated Squares")
+    st.info(f"**Base Roof:** {base_squares:,.2f} SQ\n\n**Complex (with buffer/starter):** {complex_squares:,.2f} SQ")
 
-tab_roof, tab_side, tab_gut, tab_win, tab_ins, tab_srv = st.tabs([
-    "Roofing", "Siding", "Gutters", "Windows/Doors", "Insulation", "Service"
-])
+# Package measurements for the routing engine
+meas = {
+    "base_squares": base_squares, "flat_squares": flat_squares, "complex_squares": complex_squares,
+    "base_valleys": base_valleys, "base_eaves": base_eaves, "total_flashing": total_flashing,
+    "base_ridges": base_ridges, "base_pitch": base_pitch
+}
 
-# --- ROOFING BUILDER ---
-with tab_roof:
-    st.header("Build Roofing Quote")
+# --- 5. THE REUSABLE FORM ENGINE ---
+# This function lets us generate the quoting form on ANY tab perfectly!
+def render_quoting_interface(service_name, df, meas_dict, key_prefix):
+    st.header(f"Build {service_name} Quote")
     
     col1, col2 = st.columns(2)
-    
     with col1:
         categories = df['Category'].unique()
-        selected_category = st.selectbox("1. Select Category", categories)
+        selected_category = st.selectbox("1. Select Category", categories, key=f"{key_prefix}_cat")
         
         filtered_df = df[df['Category'] == selected_category]
         opt1_choices = [x for x in filtered_df['Option 1'].unique() if str(x).strip().upper() != 'N/A' and str(x).strip() != '']
-        selected_opt1 = st.selectbox("2. Option 1", opt1_choices) if opt1_choices else "N/A"
+        selected_opt1 = st.selectbox("2. Option 1", opt1_choices, key=f"{key_prefix}_opt1") if opt1_choices else "N/A"
         
         final_df = filtered_df[filtered_df['Option 1'] == selected_opt1] if selected_opt1 != "N/A" else filtered_df[filtered_df['Option 1'] == 'N/A']
             
         opt2_choices = [x for x in final_df['Option 2'].unique() if str(x).strip().upper() != 'N/A' and str(x).strip() != '']
-        selected_opt2 = st.selectbox("3. Option 2", opt2_choices) if opt2_choices else "N/A"
+        selected_opt2 = st.selectbox("3. Option 2", opt2_choices, key=f"{key_prefix}_opt2") if opt2_choices else "N/A"
         if selected_opt2 != "N/A": final_df = final_df[final_df['Option 2'] == selected_opt2]
 
         if 'Option 3' in final_df.columns:
             opt3_choices = [x for x in final_df['Option 3'].unique() if str(x).strip().upper() != 'N/A' and str(x).strip() != '']
-            selected_opt3 = st.selectbox("4. Option 3", opt3_choices) if opt3_choices else "N/A"
+            selected_opt3 = st.selectbox("4. Option 3", opt3_choices, key=f"{key_prefix}_opt3") if opt3_choices else "N/A"
             if selected_opt3 != "N/A": final_df = final_df[final_df['Option 3'] == selected_opt3]
         else:
             selected_opt3 = "N/A"
@@ -181,33 +179,33 @@ with tab_roof:
             # --- SMART ROUTING LOGIC ---
             if "sq" in calc_unit_lower or "square" in calc_unit_lower:
                 if "shingle" in cat_lower or "layer removal" in cat_lower or "plywood" in cat_lower:
-                    qty = st.number_input("Squares (Complex Buffer Math)", value=float(complex_squares))
+                    qty = st.number_input("Squares (Complex Buffer Math)", value=float(meas_dict["complex_squares"]), key=f"{key_prefix}_qty_csq")
                 elif "low slope" in cat_lower or "flat" in cat_lower:
-                    qty = st.number_input("Squares (Flat Area)", value=float(flat_squares))
+                    qty = st.number_input("Squares (Flat Area)", value=float(meas_dict["flat_squares"]), key=f"{key_prefix}_qty_fsq")
                 else:
-                    qty = st.number_input("Squares (Base Roof Area)", value=float(base_squares))
+                    qty = st.number_input("Squares (Base Roof Area)", value=float(meas_dict["base_squares"]), key=f"{key_prefix}_qty_bsq")
                     
             elif "lf" in calc_unit_lower or "linear" in calc_unit_lower:
                 if "valley" in cat_lower:
-                    qty = st.number_input("Linear Feet (Valleys)", value=float(base_valleys))
+                    qty = st.number_input("Linear Feet (Valleys)", value=float(meas_dict["base_valleys"]), key=f"{key_prefix}_qty_val")
                 elif "smartvent" in cat_lower or "smart vent" in cat_lower:
-                    qty = st.number_input("Linear Feet (Eaves)", value=float(base_eaves))
+                    qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key_prefix}_qty_eav")
                 elif "flashing" in cat_lower or "wall" in cat_lower or "step" in cat_lower:
-                    qty = st.number_input("Linear Feet (Wall + Step)", value=float(total_flashing))
+                    qty = st.number_input("Linear Feet (Wall + Step)", value=float(meas_dict["total_flashing"]), key=f"{key_prefix}_qty_flash")
                 else:
-                    qty = st.number_input("Linear Feet (Ridges)", value=float(base_ridges))
+                    qty = st.number_input("Linear Feet (Ridges)", value=float(meas_dict["base_ridges"]), key=f"{key_prefix}_qty_ridge")
                     
             elif "flat" in calc_unit_lower:
                 qty = 1
                 st.info("Flat fee item. No measurements needed.")
             else: 
-                qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0)
+                qty = st.number_input("Quantity", min_value=1.0, value=1.0, step=1.0, key=f"{key_prefix}_qty_std")
                 
             # INVISIBLE TIER ENGINE
             if "sq" in tier_target_lower:
                 lookup_val = qty
             elif "pitch" in tier_target_lower:
-                lookup_val = base_pitch
+                lookup_val = meas_dict["base_pitch"]
             else:
                 lookup_val = None 
                 
@@ -223,7 +221,7 @@ with tab_roof:
                 line_total = unit_price * qty
                 st.metric("Line Item Total", f"${line_total:,.2f}")
                 
-                if st.button("➕ Add to Master Quote", use_container_width=True):
+                if st.button("➕ Add to Master Quote", use_container_width=True, key=f"{key_prefix}_add"):
                     desc_parts = [str(selected_opt1)]
                     if selected_opt2 != "N/A": desc_parts.append(str(selected_opt2))
                     if selected_opt3 != "N/A": desc_parts.append(str(selected_opt3))
@@ -231,7 +229,7 @@ with tab_roof:
                     if item_desc == "N/A" or item_desc == "": item_desc = selected_category
                     
                     st.session_state.quote_items.append({
-                        "Service": "Roofing", "Item": item_desc, "Qty": qty, 
+                        "Service": service_name, "Item": item_desc, "Qty": qty, 
                         "Unit Price": f"${unit_price:,.2f}", "Total": line_total
                     })
                     st.success(f"Added {item_desc} to quote!")
@@ -240,20 +238,42 @@ with tab_roof:
         else:
             st.warning("Pricing details not found for this combination.")
 
-# --- OTHER TABS ---
+# --- 6. THE SERVICE TABS ---
+st.title("🚀 Smart Roofing Quoter Pro")
+
+tab_roof, tab_side, tab_gut, tab_win, tab_ins, tab_srv = st.tabs([
+    "Roofing", "Siding", "Gutters", "Windows/Doors", "Insulation", "Service"
+])
+
+# Deploy the Reusable Form Engine to the active tabs!
+with tab_roof:
+    render_quoting_interface("Roofing", df, meas, "roof")
+
+with tab_gut:
+    render_quoting_interface("Gutters", df, meas, "gut")
+
+# Placeholders for future modules
 with tab_side: st.info("Siding module coming soon...")
-with tab_gut: st.info("Gutters module coming soon...")
 with tab_win: st.info("Windows module coming soon...")
 with tab_ins: st.info("Insulation module coming soon...")
 with tab_srv: st.info("Service module coming soon...")
 
-# --- 6. THE MASTER QUOTE ---
+# --- 7. THE MASTER QUOTE ---
 st.divider()
 st.header("🛒 Current Master Quote")
 
 if len(st.session_state.quote_items) > 0:
     cart_df = pd.DataFrame(st.session_state.quote_items)
-    st.dataframe(cart_df, hide_index=True, use_container_width=True)
+    
+    # Format the Total column specifically as Currency
+    st.dataframe(
+        cart_df, 
+        hide_index=True, 
+        use_container_width=True,
+        column_config={
+            "Total": st.column_config.NumberColumn("Total", format="$%.2f")
+        }
+    )
     
     grand_total = cart_df['Total'].sum()
     st.subheader(f"Grand Total: ${grand_total:,.2f}")
