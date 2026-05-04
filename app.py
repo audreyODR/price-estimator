@@ -16,7 +16,6 @@ SHEET_URL = st.secrets["gsheets"]["url"]
 
 @st.cache_data(ttl=60)
 def load_all_sheets(url):
-    # Convert standard sharing URL into an Excel export URL to grab ALL tabs
     match = re.search(r'/d/([a-zA-Z0-9-_]+)', url)
     if match:
         sheet_id = match.group(1)
@@ -35,11 +34,9 @@ def load_all_sheets(url):
         df['Price'] = pd.to_numeric(df['Price'].astype(str).replace('[\$,]', '', regex=True), errors='coerce')
         df = df.dropna(subset=['Price']) 
         
-        # Clean Tier Columns
         for col in ['Min_Qty', 'Max_Qty']:
             if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
 
-        # Standardize Strings
         for col in ['Option 1', 'Option 2', 'Option 3', 'Tier_Target', 'Measurement']:
             if col in df.columns: df[col] = df[col].fillna('N/A').astype(str).str.strip()
             
@@ -110,7 +107,6 @@ with st.sidebar:
     b_sqs = b_sqft / 100
     f_sqs = b_flat / 100
     t_flash = b_wall + b_step
-    # YOUR FORMULA: (SqFt + Hips + Ridges + Valleys + ((Eaves+Rakes)/100)) / 100
     complex_sqs = (b_sqft + b_hips + b_ridges + b_valleys + ((b_eaves + b_rakes)/100)) / 100
 
     st.divider()
@@ -125,15 +121,14 @@ meas = {
 
 # --- 5. THE PRESENTATION HELPER ---
 def get_tier_price(df, item_name, lookup_val, tier_target_type):
-    # Filters the sheet for the specific shingle name and checks the tier math
     f = df[df['Option 1'].str.contains(item_name, case=False, na=False)]
     if f.empty: return 0.0
     
-    # Run the invisible tier engine
-    f_tier = f[(f['Min_Qty'] <= lookup_val) & (f['Max_Qty'] >= lookup_val)]
-    if not f_tier.empty:
-        return f_tier['Price'].values[0]
-    return f['Price'].values[0] # Fallback to first row if tier not found
+    if 'Min_Qty' in f.columns and 'Max_Qty' in f.columns:
+        f_tier = f[(f['Min_Qty'] <= lookup_val) & (f['Max_Qty'] >= lookup_val)]
+        if not f_tier.empty:
+            return f_tier['Price'].values[0]
+    return f['Price'].values[0]
 
 # --- 6. THE QUOTING ENGINE ---
 def render_interface(service, df, meas_dict, key):
@@ -149,14 +144,25 @@ def render_interface(service, df, meas_dict, key):
         opt1 = st.selectbox("2. Option 1", f['Option 1'].unique(), key=f"{key}_o1")
         f = f[f['Option 1'] == opt1]
         
-        o2_list = [x for x in f['Option 2'].unique() if x != 'N/A']
-        opt2 = st.selectbox("3. Option 2", o2_list, key=f"{key}_o2") if o2_list else "N/A"
-        if opt2 != "N/A": f = f[f['Option 2'] == opt2]
+        if 'Option 2' in f.columns:
+            o2_list = [x for x in f['Option 2'].unique() if x != 'N/A']
+            opt2 = st.selectbox("3. Option 2", o2_list, key=f"{key}_o2") if o2_list else "N/A"
+            if opt2 != "N/A": f = f[f['Option 2'] == opt2]
+        else:
+            opt2 = "N/A"
+            
+        if 'Option 3' in f.columns:
+            o3_list = [x for x in f['Option 3'].unique() if x != 'N/A']
+            opt3 = st.selectbox("4. Option 3", o3_list, key=f"{key}_o3") if o3_list else "N/A"
+            if opt3 != "N/A": f = f[f['Option 3'] == opt3]
+        else:
+            opt3 = "N/A"
         
     with c2:
         if not f.empty:
-            m_type = f['Measurement'].values[0].lower()
-            t_target = f['Tier_Target'].values[0].lower()
+            # THE SAFETY NET FIX: Safely retrieve calculation metrics even if the columns are missing
+            m_type = str(f['Measurement'].values[0]).lower() if 'Measurement' in f.columns else "flat fee"
+            t_target = str(f['Tier_Target'].values[0]).lower() if 'Tier_Target' in f.columns else "n/a"
             
             # Smart Routing
             if "sq" in m_type:
@@ -173,18 +179,24 @@ def render_interface(service, df, meas_dict, key):
             
             # Tier Logic
             lookup = qty if "sq" in t_target else meas_dict["base_pitch"] if "pitch" in t_target else None
-            if lookup is not None:
+            if lookup is not None and 'Min_Qty' in f.columns and 'Max_Qty' in f.columns:
                 t_row = f[(f['Min_Qty'] <= lookup) & (f['Max_Qty'] >= lookup)]
                 if not t_row.empty: f = t_row
             
             price = f['Price'].values[0]
-            st.metric("Price per Unit", f"${price:,.2f}")
+            display_unit = str(f['Measurement'].values[0]).strip() if 'Measurement' in f.columns else "Flat Fee"
+            st.write(f"**Unit Price:** ${price:,.2f} ({display_unit})")
+            
             total = price * qty
             st.metric("Line Total", f"${total:,.2f}")
             
             if st.button("➕ Add to Quote", key=f"{key}_btn"):
-                desc = f"{opt1} - {opt2}" if opt2 != "N/A" else opt1
-                st.session_state.quote_items.append({"Service": service, "Item": desc, "Qty": qty, "Total": total})
+                desc_parts = [str(opt1)]
+                if opt2 != "N/A": desc_parts.append(str(opt2))
+                if opt3 != "N/A": desc_parts.append(str(opt3))
+                desc = " - ".join(desc_parts) if desc_parts != ["N/A"] else cat
+                
+                st.session_state.quote_items.append({"Service": service, "Item": desc, "Qty": qty, "Unit Price": f"${price:,.2f}", "Total": total})
                 st.success("Added!")
 
 # --- 7. UI TABS ---
@@ -198,18 +210,14 @@ with t_pres:
     df_r = all_sheets.get("Roofing", pd.DataFrame())
     
     if not df_r.empty:
-        # INVISIBLE MATH ENGINE
-        # Base
         p_patriot = get_tier_price(df_r, "Patriot", meas["complex_squares"], "Squares") * meas["complex_squares"]
         p_landmark = get_tier_price(df_r, "Landmark Pro", meas["complex_squares"], "Squares") * meas["complex_squares"]
         p_northgate = get_tier_price(df_r, "Northgate", meas["complex_squares"], "Squares") * meas["complex_squares"]
-        # Luxury
         p_belmont = get_tier_price(df_r, "Belmont", meas["complex_squares"], "Squares") * meas["complex_squares"]
         p_grand = get_tier_price(df_r, "Grand Manor", meas["complex_squares"], "Squares") * meas["complex_squares"]
 
         if st.button("🖼️ Open Presentation Slides"):
             if series == "Base Architectural Series":
-                # Injected HTML for Base Series
                 html_code = f"""
                 <div style="font-family: 'Merriweather', serif; padding: 40px; color: #1a365d;">
                     <h1 style="border-bottom: 2px solid #c29e61; padding-bottom: 15px;">Architectural Investment Tiers</h1>
@@ -233,7 +241,6 @@ with t_pres:
                 </div>
                 """
             else:
-                # Injected HTML for Luxury Series
                 html_code = f"""
                 <div style="font-family: 'Merriweather', serif; padding: 40px; color: #1a365d;">
                     <h1 style="border-bottom: 2px solid #c29e61; padding-bottom: 15px;">Luxury Estate Collection</h1>
