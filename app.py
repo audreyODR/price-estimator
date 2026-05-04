@@ -149,4 +149,118 @@ def render_interface(service, df, meas_dict, key):
         opt1 = st.selectbox("2. Option 1", f['Option 1'].unique(), key=f"{key}_o1")
         f = f[f['Option 1'] == opt1]
         
-        o
+        o2_list = [x for x in f['Option 2'].unique() if x != 'N/A']
+        opt2 = st.selectbox("3. Option 2", o2_list, key=f"{key}_o2") if o2_list else "N/A"
+        if opt2 != "N/A": f = f[f['Option 2'] == opt2]
+        
+    with c2:
+        if not f.empty:
+            m_type = f['Measurement'].values[0].lower()
+            t_target = f['Tier_Target'].values[0].lower()
+            
+            # Smart Routing
+            if "sq" in m_type:
+                if any(x in cat.lower() for x in ["shingle", "removal", "plywood"]):
+                    qty = st.number_input("Squares (Complex Buffer)", value=float(meas_dict["complex_squares"]), key=f"{key}_q_c")
+                elif "low slope" in cat.lower():
+                    qty = st.number_input("Squares (Flat Area)", value=float(meas_dict["flat_squares"]), key=f"{key}_q_f")
+                else: qty = st.number_input("Squares", value=float(meas_dict["base_squares"]), key=f"{key}_q_b")
+            elif "lf" in m_type:
+                if service == "Gutters": qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key}_q_g")
+                elif "valley" in cat.lower(): qty = st.number_input("Linear Feet (Valleys)", value=float(meas_dict["base_valleys"]), key=f"{key}_q_v")
+                else: qty = st.number_input("Linear Feet", value=float(meas_dict["base_ridges"]), key=f"{key}_q_r")
+            else: qty = st.number_input("Quantity", min_value=1.0, value=1.0, key=f"{key}_q_s")
+            
+            # Tier Logic
+            lookup = qty if "sq" in t_target else meas_dict["base_pitch"] if "pitch" in t_target else None
+            if lookup is not None:
+                t_row = f[(f['Min_Qty'] <= lookup) & (f['Max_Qty'] >= lookup)]
+                if not t_row.empty: f = t_row
+            
+            price = f['Price'].values[0]
+            st.metric("Price per Unit", f"${price:,.2f}")
+            total = price * qty
+            st.metric("Line Total", f"${total:,.2f}")
+            
+            if st.button("➕ Add to Quote", key=f"{key}_btn"):
+                desc = f"{opt1} - {opt2}" if opt2 != "N/A" else opt1
+                st.session_state.quote_items.append({"Service": service, "Item": desc, "Qty": qty, "Total": total})
+                st.success("Added!")
+
+# --- 7. UI TABS ---
+st.title("🚀 Smart Quoter Pro")
+t_pres, t_roof, t_gut, t_side, t_win = st.tabs(["Presentation", "Roofing", "Gutters", "Siding", "Windows"])
+
+with t_pres:
+    st.header("✨ Homeowner Presentation Mode")
+    series = st.radio("Select Presentation Tier", ["Base Architectural Series", "Luxury Estate Series"], horizontal=True)
+    
+    df_r = all_sheets.get("Roofing", pd.DataFrame())
+    
+    if not df_r.empty:
+        # INVISIBLE MATH ENGINE
+        # Base
+        p_patriot = get_tier_price(df_r, "Patriot", meas["complex_squares"], "Squares") * meas["complex_squares"]
+        p_landmark = get_tier_price(df_r, "Landmark Pro", meas["complex_squares"], "Squares") * meas["complex_squares"]
+        p_northgate = get_tier_price(df_r, "Northgate", meas["complex_squares"], "Squares") * meas["complex_squares"]
+        # Luxury
+        p_belmont = get_tier_price(df_r, "Belmont", meas["complex_squares"], "Squares") * meas["complex_squares"]
+        p_grand = get_tier_price(df_r, "Grand Manor", meas["complex_squares"], "Squares") * meas["complex_squares"]
+
+        if st.button("🖼️ Open Presentation Slides"):
+            if series == "Base Architectural Series":
+                # Injected HTML for Base Series
+                html_code = f"""
+                <div style="font-family: 'Merriweather', serif; padding: 40px; color: #1a365d;">
+                    <h1 style="border-bottom: 2px solid #c29e61; padding-bottom: 15px;">Architectural Investment Tiers</h1>
+                    <div style="display: flex; gap: 20px; margin-top: 40px;">
+                        <div style="flex: 1; padding: 25px; background: #fdfbf7; border-top: 5px solid #1a365d; border-radius: 8px;">
+                            <h3 style="color: #c29e61;">GOOD: Patriot</h3>
+                            <h2 style="font-size: 32px;">${p_patriot:,.2f}</h2>
+                            <p style="font-size: 14px;">Reliable entry-level architectural protection.</p>
+                        </div>
+                        <div style="flex: 1; padding: 25px; background: #fffcf5; border-top: 5px solid #c29e61; border-radius: 8px; box-shadow: 0 10px 20px rgba(0,0,0,0.1);">
+                            <h3 style="color: #c29e61;">BETTER: Landmark Pro</h3>
+                            <h2 style="font-size: 32px;">${p_landmark:,.2f}</h2>
+                            <p style="font-size: 14px;"><b>Recommended:</b> Best balance of cost and performance.</p>
+                        </div>
+                        <div style="flex: 1; padding: 25px; background: #fdfbf7; border-top: 5px solid #1a365d; border-radius: 8px;">
+                            <h3 style="color: #c29e61;">BEST: Northgate</h3>
+                            <h2 style="font-size: 32px;">${p_northgate:,.2f}</h2>
+                            <p style="font-size: 14px;">Maximum impact and storm resilience.</p>
+                        </div>
+                    </div>
+                </div>
+                """
+            else:
+                # Injected HTML for Luxury Series
+                html_code = f"""
+                <div style="font-family: 'Merriweather', serif; padding: 40px; color: #1a365d;">
+                    <h1 style="border-bottom: 2px solid #c29e61; padding-bottom: 15px;">Luxury Estate Collection</h1>
+                    <div style="display: flex; gap: 40px; margin-top: 40px;">
+                        <div style="flex: 1; padding: 35px; background: #fdfbf7; border-top: 5px solid #1a365d; border-radius: 8px;">
+                            <h3 style="color: #c29e61;">Luxury: Belmont</h3>
+                            <h2 style="font-size: 40px;">${p_belmont:,.2f}</h2>
+                            <p>Authentic slate replication without the stone weight.</p>
+                        </div>
+                        <div style="flex: 1; padding: 35px; background: #fffcf5; border-top: 5px solid #c29e61; border-radius: 8px; box-shadow: 0 10px 30px rgba(0,0,0,0.1);">
+                            <h3 style="color: #c29e61;">Grand Luxury: Grand Manor</h3>
+                            <h2 style="font-size: 40px;">${p_grand:,.2f}</h2>
+                            <p>Flagship triple-layer construction for the ultimate estate.</p>
+                        </div>
+                    </div>
+                </div>
+                """
+            components.html(html_code, height=500)
+
+with t_roof: render_interface("Roofing", all_sheets.get("Roofing", pd.DataFrame()), meas, "r")
+with t_gut: render_interface("Gutters", all_sheets.get("Gutters", pd.DataFrame()), meas, "g")
+
+# --- 8. CART ---
+st.divider()
+st.header("🛒 Current Master Quote")
+if st.session_state.quote_items:
+    c_df = pd.DataFrame(st.session_state.quote_items)
+    st.dataframe(c_df, hide_index=True, column_config={"Total": st.column_config.NumberColumn(format="$%.2f")}, use_container_width=True)
+    st.subheader(f"Grand Total: ${c_df['Total'].sum():,.2f}")
+    if st.button("🗑️ Clear"): st.session_state.quote_items = []; st.rerun()
