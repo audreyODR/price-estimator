@@ -281,8 +281,39 @@ with t_gut: render_interface("Gutters", all_sheets.get("Gutters", pd.DataFrame()
 # --- 8. CART ---
 st.divider()
 st.header("🛒 Current Master Quote")
-if st.session_state.quote_items:
+
+if len(st.session_state.quote_items) > 0:
     c_df = pd.DataFrame(st.session_state.quote_items)
-    st.dataframe(c_df, hide_index=True, column_config={"Total": st.column_config.NumberColumn(format="$%.2f")}, use_container_width=True)
-    st.subheader(f"Grand Total: ${c_df['Total'].sum():,.2f}")
-    if st.button("🗑️ Clear"): st.session_state.quote_items = []; st.rerun()
+    
+    st.dataframe(
+        c_df, 
+        hide_index=True, 
+        use_container_width=True,
+        column_config={
+            "Total": st.column_config.NumberColumn("Total", format="$%.2f")
+        }
+    )
+    
+    grand_total = c_df['Total'].sum()
+    st.subheader(f"Grand Total: ${grand_total:,.2f}")
+    
+    # --- NEW: SIDE-BY-SIDE EXPORT & CLEAR BUTTONS ---
+    colA, colB = st.columns(2)
+    
+    with colA:
+        # Convert the dataframe to a downloadable CSV
+        csv_data = c_df.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="💾 Download Quote for CRM (CSV)",
+            data=csv_data,
+            file_name="Master_Roofing_Quote.csv",
+            mime="text/csv",
+            use_container_width=True
+        )
+        
+    with colB:
+        if st.button("🗑️ Clear Quote", use_container_width=True):
+            st.session_state.quote_items = []
+            st.rerun()
+else:
+    st.caption("Your quote is currently empty.")
