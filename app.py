@@ -103,7 +103,6 @@ with st.sidebar:
     b_wall = st.number_input("Wall Flash", value=p["wall_flash"])
     b_step = st.number_input("Step Flash", value=p["step_flash"])
 
-    # CALCULATIONS
     b_sqs = b_sqft / 100
     f_sqs = b_flat / 100
     t_flash = b_wall + b_step
@@ -130,41 +129,54 @@ def get_tier_price(df, item_name, lookup_val, tier_target_type):
             return f_tier['Price'].values[0]
     return f['Price'].values[0]
 
-# --- 6. THE QUOTING ENGINE ---
+# --- 6. THE QUOTING ENGINE (NEW UI LAYOUT) ---
 def render_interface(service, df, meas_dict, key):
     if df.empty:
         st.error(f"⚠️ Tab '{service}' not found."); return
     
     st.header(f"Build {service} Quote")
-    c1, c2 = st.columns(2)
-    with c1:
-        cat = st.selectbox("1. Category", df['Category'].unique(), key=f"{key}_cat")
-        f = df[df['Category'] == cat]
+    
+    # 70% Left Form / 5% Spacer / 25% Right Summary
+    c_form, c_spacer, c_summary = st.columns([6.5, 0.5, 3])
+    
+    with c_form:
+        st.markdown("#### 1. Select Item")
         
-        opt1 = st.selectbox("2. Option 1", f['Option 1'].unique(), key=f"{key}_o1")
-        f = f[f['Option 1'] == opt1]
+        # Row 1: Category & Option 1
+        r1_col1, r1_col2 = st.columns(2)
+        with r1_col1:
+            cat = st.selectbox("Category", df['Category'].unique(), key=f"{key}_cat")
+            f = df[df['Category'] == cat]
+        with r1_col2:
+            opt1 = st.selectbox("Product / Series", f['Option 1'].unique(), key=f"{key}_o1")
+            f = f[f['Option 1'] == opt1]
         
-        if 'Option 2' in f.columns:
-            o2_list = [x for x in f['Option 2'].unique() if x != 'N/A']
-            opt2 = st.selectbox("3. Option 2", o2_list, key=f"{key}_o2") if o2_list else "N/A"
-            if opt2 != "N/A": f = f[f['Option 2'] == opt2]
-        else:
-            opt2 = "N/A"
-            
-        if 'Option 3' in f.columns:
-            o3_list = [x for x in f['Option 3'].unique() if x != 'N/A']
-            opt3 = st.selectbox("4. Option 3", o3_list, key=f"{key}_o3") if o3_list else "N/A"
-            if opt3 != "N/A": f = f[f['Option 3'] == opt3]
-        else:
-            opt3 = "N/A"
+        # Row 2: Option 2 & Option 3 (Only show if they exist to reduce clutter)
+        has_opt2 = 'Option 2' in f.columns and any(x != 'N/A' for x in f['Option 2'].unique())
+        has_opt3 = 'Option 3' in f.columns and any(x != 'N/A' for x in f['Option 3'].unique())
         
-    with c2:
+        opt2, opt3 = "N/A", "N/A"
+        if has_opt2 or has_opt3:
+            r2_col1, r2_col2 = st.columns(2)
+            with r2_col1:
+                if has_opt2:
+                    o2_list = [x for x in f['Option 2'].unique() if x != 'N/A']
+                    opt2 = st.selectbox("Style / Tier", o2_list, key=f"{key}_o2") if o2_list else "N/A"
+                    if opt2 != "N/A": f = f[f['Option 2'] == opt2]
+            with r2_col2:
+                if has_opt3:
+                    o3_list = [x for x in f['Option 3'].unique() if x != 'N/A']
+                    opt3 = st.selectbox("Color / Finish", o3_list, key=f"{key}_o3") if o3_list else "N/A"
+                    if opt3 != "N/A": f = f[f['Option 3'] == opt3]
+
+        st.write("") # Spacer
+        st.markdown("#### 2. Confirm Measurement")
+        
         if not f.empty:
             m_type = str(f['Measurement'].values[0]).lower() if 'Measurement' in f.columns else "flat fee"
             t_target = str(f['Tier_Target'].values[0]).lower() if 'Tier_Target' in f.columns else "n/a"
             cat_lower = str(cat).lower()
             
-            # THE FIX: Dynamic keys attached to the math force the box to reset when data changes!
             if "sq" in m_type or "square" in m_type:
                 if any(x in cat_lower for x in ["shingle", "removal", "plywood"]):
                     qty = st.number_input("Squares (Complex Buffer)", value=float(meas_dict["complex_squares"]), key=f"{key}_csq_{meas_dict['complex_squares']}")
@@ -172,7 +184,6 @@ def render_interface(service, df, meas_dict, key):
                     qty = st.number_input("Squares (Flat Area)", value=float(meas_dict["flat_squares"]), key=f"{key}_fsq_{meas_dict['flat_squares']}")
                 else: 
                     qty = st.number_input("Squares (Base Roof)", value=float(meas_dict["base_squares"]), key=f"{key}_bsq_{meas_dict['base_squares']}")
-            
             elif "lf" in m_type or "linear" in m_type:
                 if service == "Gutters": 
                     qty = st.number_input("Linear Feet (Eaves)", value=float(meas_dict["base_eaves"]), key=f"{key}_geav_{meas_dict['base_eaves']}")
@@ -184,35 +195,44 @@ def render_interface(service, df, meas_dict, key):
                     qty = st.number_input("Linear Feet (Wall + Step)", value=float(meas_dict["total_flashing"]), key=f"{key}_fla_{meas_dict['total_flashing']}")
                 else: 
                     qty = st.number_input("Linear Feet (Ridges)", value=float(meas_dict["base_ridges"]), key=f"{key}_rid_{meas_dict['base_ridges']}")
-            
             elif "flat" in m_type:
                 qty = 1
                 st.info("Flat fee item. No measurements needed.")
-            
             else: 
                 qty = st.number_input("Quantity", min_value=1.0, value=1.0, key=f"{key}_std_{meas_dict['base_squares']}")
-            
-            # Tier Logic
-            lookup = qty if "sq" in t_target else meas_dict["base_pitch"] if "pitch" in t_target else None
-            if lookup is not None and 'Min_Qty' in f.columns and 'Max_Qty' in f.columns:
-                t_row = f[(f['Min_Qty'] <= lookup) & (f['Max_Qty'] >= lookup)]
-                if not t_row.empty: f = t_row
-            
-            price = f['Price'].values[0]
-            display_unit = str(f['Measurement'].values[0]).strip() if 'Measurement' in f.columns else "Flat Fee"
-            st.write(f"**Unit Price:** ${price:,.2f} ({display_unit})")
-            
-            total = price * qty
-            st.metric("Line Total", f"${total:,.2f}")
-            
-            if st.button("➕ Add to Quote", key=f"{key}_btn"):
-                desc_parts = [str(opt1)]
-                if opt2 != "N/A": desc_parts.append(str(opt2))
-                if opt3 != "N/A": desc_parts.append(str(opt3))
-                desc = " - ".join(desc_parts) if desc_parts != ["N/A"] else cat
+
+    with c_summary:
+        if not f.empty:
+            # Container border creates a nice "receipt" look
+            with st.container(border=True):
+                st.markdown("#### Item Summary")
                 
-                st.session_state.quote_items.append({"Service": service, "Item": desc, "Qty": qty, "Unit Price": f"${price:,.2f}", "Total": total})
-                st.success("Added!")
+                # Tier Logic
+                lookup = qty if "sq" in t_target else meas_dict["base_pitch"] if "pitch" in t_target else None
+                if lookup is not None and 'Min_Qty' in f.columns and 'Max_Qty' in f.columns:
+                    t_row = f[(f['Min_Qty'] <= lookup) & (f['Max_Qty'] >= lookup)]
+                    if not t_row.empty: f = t_row
+                
+                price = f['Price'].values[0]
+                display_unit = str(f['Measurement'].values[0]).strip() if 'Measurement' in f.columns else "Flat Fee"
+                
+                # Clean visual metrics
+                st.caption(f"Unit Price: ${price:,.2f} ({display_unit})")
+                total = price * qty
+                st.metric(label="Line Total", value=f"${total:,.2f}")
+                
+                st.write("") # Spacer before button
+                
+                if st.button("➕ Add to Quote", use_container_width=True, type="primary", key=f"{key}_btn"):
+                    desc_parts = [str(opt1)]
+                    if opt2 != "N/A": desc_parts.append(str(opt2))
+                    if opt3 != "N/A": desc_parts.append(str(opt3))
+                    desc = " - ".join(desc_parts) if desc_parts != ["N/A"] else cat
+                    
+                    st.session_state.quote_items.append({"Service": service, "Item": desc, "Qty": qty, "Unit Price": f"${price:,.2f}", "Total": total})
+                    st.success("Added to Master Quote!")
+        else:
+            st.warning("Pricing details not found for this combination.")
 
 # --- 7. UI TABS ---
 st.title("🚀 Smart Quoter Pro")
@@ -284,33 +304,20 @@ st.header("🛒 Current Master Quote")
 
 if len(st.session_state.quote_items) > 0:
     c_df = pd.DataFrame(st.session_state.quote_items)
-    
     st.dataframe(
         c_df, 
         hide_index=True, 
         use_container_width=True,
-        column_config={
-            "Total": st.column_config.NumberColumn("Total", format="$%.2f")
-        }
+        column_config={"Total": st.column_config.NumberColumn("Total", format="$%.2f")}
     )
     
     grand_total = c_df['Total'].sum()
     st.subheader(f"Grand Total: ${grand_total:,.2f}")
     
-    # --- NEW: SIDE-BY-SIDE EXPORT & CLEAR BUTTONS ---
     colA, colB = st.columns(2)
-    
     with colA:
-        # Convert the dataframe to a downloadable CSV
         csv_data = c_df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="💾 Download Quote for CRM (CSV)",
-            data=csv_data,
-            file_name="Master_Roofing_Quote.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
-        
+        st.download_button(label="💾 Download Quote for CRM (CSV)", data=csv_data, file_name="Master_Roofing_Quote.csv", mime="text/csv", use_container_width=True)
     with colB:
         if st.button("🗑️ Clear Quote", use_container_width=True):
             st.session_state.quote_items = []
