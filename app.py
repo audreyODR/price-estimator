@@ -11,7 +11,7 @@ st.set_page_config(page_title="Smart Roofing Quoter Pro", layout="wide")
 if "quote_items" not in st.session_state:
     st.session_state.quote_items = []
 
-# --- 2. GOOGLE SHEETS CONNECTION (MULTI-TAB EXCEL) ---
+# --- 2. GOOGLE SHEETS CONNECTION ---
 SHEET_URL = st.secrets["gsheets"]["url"]
 
 @st.cache_data(ttl=60)
@@ -45,11 +45,12 @@ def load_all_sheets(url):
 
 all_sheets = load_all_sheets(SHEET_URL)
 
-# --- 3. PDF PARSER ---
+# --- 3. UPDATED PDF PARSER (Includes Transitions, Parapets, etc.) ---
 def extract_roofr_data(uploaded_file):
     data = {
         "sqft": 0.0, "flat": 0.0, "pitch": 0.0, "ridges": 0.0, "hips": 0.0, 
-        "valleys": 0.0, "eaves": 0.0, "rakes": 0.0, "wall_flash": 0.0, "step_flash": 0.0
+        "valleys": 0.0, "eaves": 0.0, "rakes": 0.0, "wall_flash": 0.0, "step_flash": 0.0,
+        "facets": 0.0, "transitions": 0.0, "parapet": 0.0
     }
     with pdfplumber.open(uploaded_file) as pdf:
         for page in pdf.pages:
@@ -65,6 +66,7 @@ def extract_roofr_data(uploaded_file):
 
                 if (v := get_val(r"total roof area.*?(?:\"|:)\s*([\d,o]+)")) is not None: data["sqft"] = v
                 if (v := get_val(r"total flat.*?(?:\"|:)\s*([\d,o]+)")) is not None: data["flat"] = v
+                if (v := get_val(r"total roof facets.*?(?:\"|:)\s*([\d,o]+)")) is not None: data["facets"] = v
                 if (v := get_val(r"pitch\s*[:]?\s*(\d+)/12")) is not None: data["pitch"] = v
                 if (v := get_val(r"total ridges\s*.*?([\d,o]+)")) is not None: data["ridges"] = v
                 if (v := get_val(r"total hips\s*.*?([\d,o]+)")) is not None: data["hips"] = v
@@ -73,47 +75,69 @@ def extract_roofr_data(uploaded_file):
                 if (v := get_val(r"total rakes\s*.*?([\d,o]+)")) is not None: data["rakes"] = v
                 if (v := get_val(r"total wall flashing\s*.*?([\d,o]+)")) is not None: data["wall_flash"] = v
                 if (v := get_val(r"total step flashing\s*.*?([\d,o]+)")) is not None: data["step_flash"] = v
+                if (v := get_val(r"total transitions\s*.*?([\d,o]+)")) is not None: data["transitions"] = v
+                if (v := get_val(r"total parapet wall\s*.*?([\d,o]+)")) is not None: data["parapet"] = v
     return data
 
-# --- 4. SIDEBAR & BASE MEASUREMENTS ---
+# --- 4. SIDEBAR & COMPACT BASE MEASUREMENTS ---
 with st.sidebar:
     st.header("📂 Roofr Integration")
     uploaded_pdf = st.file_uploader("Upload Roofr PDF", type="pdf")
     
-    p = {"sqft": 0.0, "flat": 0.0, "pitch": 0.0, "ridges": 0.0, "hips": 0.0, "valleys": 0.0, "eaves": 0.0, "rakes": 0.0, "wall_flash": 0.0, "step_flash": 0.0}
+    p = {k: 0.0 for k in ["sqft", "flat", "pitch", "ridges", "hips", "valleys", "eaves", "rakes", "wall_flash", "step_flash", "facets", "transitions", "parapet"]}
     if uploaded_pdf:
         p = extract_roofr_data(uploaded_pdf)
         st.success("Measurements extracted!")
     
     st.divider()
     st.subheader("📏 Base Measurements")
-    b_sqft = st.number_input("Total Sq Ft", value=p["sqft"])
-    b_flat = st.number_input("Flat Roof Sq Ft", value=p["flat"])
-    b_pitch = st.number_input("Pitch (X/12)", value=p["pitch"])
     
-    colA, colB = st.columns(2)
-    with colA:
+    # Grid Layout for Sidebar to reduce scrolling
+    col1, col2 = st.columns(2)
+    with col1:
+        b_sqft = st.number_input("Total Sq Ft", value=p["sqft"])
+        b_flat = st.number_input("Flat Area", value=p["flat"])
+        b_pitch = st.number_input("Pitch (X/12)", value=p["pitch"])
+        b_waste = st.number_input("Waste %", value=15.0, step=1.0)
+    with col2:
+        b_facets = st.number_input("Facets", value=p["facets"])
+        b_trans = st.number_input("Transitions", value=p["transitions"])
+        b_parapet = st.number_input("Parapet Wall", value=p["parapet"])
+        st.write("") # Spacer
+
+    st.caption("**Edge & Flashing Details**")
+    col3, col4 = st.columns(2)
+    with col3:
         b_ridges = st.number_input("Ridges", value=p["ridges"])
         b_valleys = st.number_input("Valleys", value=p["valleys"])
-    with colB:
+        b_wall = st.number_input("Wall Flash", value=p["wall_flash"])
+    with col4:
         b_eaves = st.number_input("Eaves", value=p["eaves"])
         b_rakes = st.number_input("Rakes", value=p["rakes"])
+        b_hips = st.number_input("Hips", value=p["hips"])
     
-    b_hips = st.number_input("Hips", value=p["hips"])
-    b_wall = st.number_input("Wall Flash", value=p["wall_flash"])
     b_step = st.number_input("Step Flash", value=p["step_flash"])
 
-    b_sqs = b_sqft / 100
+    # --- UPDATED MATH LOGIC ---
+    # Calc 1: SQ with Waste
+    sqft_w_waste = b_sqft * (1 + (b_waste / 100))
+    b_sqs_waste = sqft_w_waste / 100
+    
+    # Calc 2: Shingle Order SQ (Starter/Hip/Ridge Factored)
+    # Formula: (sqft with waste + hips + ridges + ((eaves+rakes)/100)) / 100
+    shingle_calc_sqs = (sqft_w_waste + b_hips + b_ridges + ((b_eaves + b_rakes) / 100)) / 100
+
     f_sqs = b_flat / 100
     t_flash = b_wall + b_step
-    complex_sqs = (b_sqft + b_hips + b_ridges + b_valleys + ((b_eaves + b_rakes)/100)) / 100
 
     st.divider()
     st.subheader("📐 Calculated Squares")
-    st.info(f"**Base Roof:** {b_sqs:,.2f} SQ\n\n**Complex (w/ Starter):** {complex_sqs:,.2f} SQ")
+    st.info(f"**Area w/ Waste:** {b_sqs_waste:,.2f} SQ\n\n**Order SQ (Shingles):** {shingle_calc_sqs:,.2f} SQ")
 
 meas = {
-    "base_squares": b_sqs, "flat_squares": f_sqs, "complex_squares": complex_sqs,
+    "base_squares": b_sqs_waste, 
+    "flat_squares": f_sqs, 
+    "complex_squares": shingle_calc_sqs,
     "base_valleys": b_valleys, "base_eaves": b_eaves, "total_flashing": t_flash,
     "base_ridges": b_ridges, "base_pitch": b_pitch
 }
