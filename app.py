@@ -258,9 +258,9 @@ def render_interface(service, df, meas_dict, key):
         else:
             st.warning("Pricing details not found for this combination.")
 
-# --- 7. UI TABS ---
+# --- 7. UI TABS (UPDATED WITH FLAT ROOFING) ---
 st.title("🚀 Smart Quoter Pro")
-t_pres, t_roof, t_gut, t_side, t_win = st.tabs(["Presentation", "Roofing", "Gutters", "Siding", "Windows"])
+t_pres, t_roof, t_flat, t_gut, t_side, t_win = st.tabs(["Presentation", "Roofing", "Flat Roofing", "Gutters", "Siding", "Windows"])
 
 with t_pres:
     st.header("✨ Homeowner Presentation Mode")
@@ -320,8 +320,8 @@ with t_pres:
             components.html(html_code, height=500)
 
 with t_roof: render_interface("Roofing", all_sheets.get("Roofing", pd.DataFrame()), meas, "r")
+with t_flat: render_interface("Flat Roofing", all_sheets.get("Flat Roofing", pd.DataFrame()), meas, "f")
 with t_gut: render_interface("Gutters", all_sheets.get("Gutters", pd.DataFrame()), meas, "g")
-
 # --- 8. CART ---
 st.divider()
 st.header("🛒 Current Master Quote")
