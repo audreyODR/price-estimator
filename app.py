@@ -328,28 +328,53 @@ with t_pres:
 with t_roof: render_interface("Roofing", all_sheets.get("Roofing", pd.DataFrame()), meas, "r")
 with t_flat: render_interface("Flat Roofing", all_sheets.get("Flat Roofing", pd.DataFrame()), meas, "f")
 with t_gut: render_interface("Gutters", all_sheets.get("Gutters", pd.DataFrame()), meas, "g")
+
 # --- 8. CART ---
 st.divider()
 st.header("🛒 Current Master Quote")
 
 if len(st.session_state.quote_items) > 0:
-    c_df = pd.DataFrame(st.session_state.quote_items)
-    st.dataframe(
-        c_df, 
-        hide_index=True, 
-        use_container_width=True,
-        column_config={"Total": st.column_config.NumberColumn("Total", format="$%.2f")}
-    )
     
-    grand_total = c_df['Total'].sum()
+    # --- Table Header ---
+    h1, h2, h3, h4, h5, h6 = st.columns([1.5, 4, 1, 1.5, 1.5, 0.5])
+    h1.caption("**Service**")
+    h2.caption("**Item**")
+    h3.caption("**Qty**")
+    h4.caption("**Unit Price**")
+    h5.caption("**Total**")
+    h6.caption("")
+    st.divider()
+    
+    # --- Table Rows ---
+    for i, item in enumerate(st.session_state.quote_items):
+        c1, c2, c3, c4, c5, c6 = st.columns([1.5, 4, 1, 1.5, 1.5, 0.5])
+        
+        c1.write(item["Service"])
+        c2.write(item["Item"])
+        c3.write(str(item["Qty"]))
+        c4.write(item["Unit Price"])
+        c5.write(f"${item['Total']:,.2f}")
+        
+        # The delete button removes the item by index and reruns the app to refresh the cart
+        if c6.button("❌", key=f"del_{i}", help="Remove Line Item"):
+            st.session_state.quote_items.pop(i)
+            st.rerun()
+            
+    st.divider()
+    
+    # Recalculate Grand Total dynamically from the session state
+    grand_total = sum(item['Total'] for item in st.session_state.quote_items)
     st.subheader(f"Grand Total: ${grand_total:,.2f}")
+    
+    # Recreate the DataFrame cleanly just for the CSV Download feature
+    c_df = pd.DataFrame(st.session_state.quote_items)
     
     colA, colB = st.columns(2)
     with colA:
         csv_data = c_df.to_csv(index=False).encode('utf-8')
         st.download_button(label="💾 Download Quote for CRM (CSV)", data=csv_data, file_name="Master_Roofing_Quote.csv", mime="text/csv", use_container_width=True)
     with colB:
-        if st.button("🗑️ Clear Quote", use_container_width=True):
+        if st.button("🗑️ Clear Entire Quote", use_container_width=True):
             st.session_state.quote_items = []
             st.rerun()
 else:
