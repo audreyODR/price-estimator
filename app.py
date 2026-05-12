@@ -66,7 +66,7 @@ def extract_roofr_data(uploaded_file):
 
                 if (v := get_val(r"total roof area.*?(?:\"|:)\s*([\d,o]+)")) is not None: data["sqft"] = v
                 if (v := get_val(r"total flat.*?(?:\"|:)\s*([\d,o]+)")) is not None: data["flat"] = v
-                if (v := get_val(v := get_val(r"total roof facets[^\d]*([\d,o]+)")) is not None: data["facets"] = v
+                if (v := get_val(r"total roof facets[^\d]*([\d,o]+)")) is not None: data["facets"] = v
                 if (v := get_val(r"pitch\s*[:]?\s*(\d+)/12")) is not None: data["pitch"] = v
                 if (v := get_val(r"total ridges\s*.*?([\d,o]+)")) is not None: data["ridges"] = v
                 if (v := get_val(r"total hips\s*.*?([\d,o]+)")) is not None: data["hips"] = v
