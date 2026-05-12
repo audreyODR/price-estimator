@@ -90,6 +90,11 @@ with st.sidebar:
         st.success("Measurements extracted!")
     
     st.divider()
+    
+    # Create a placeholder container at the top for our final math
+    calc_container = st.container()
+    
+    st.divider()
     st.subheader("📏 Base Measurements")
     
     # Grid Layout for Sidebar to reduce scrolling
@@ -130,9 +135,10 @@ with st.sidebar:
     f_sqs = b_flat / 100
     t_flash = b_wall + b_step
 
-    st.divider()
-    st.subheader("📐 Calculated Squares")
-    st.info(f"**Area w/ Waste:** {b_sqs_waste:,.2f} SQ\n\n**Order SQ (Shingles):** {shingle_calc_sqs:,.2f} SQ")
+    # Populate the placeholder at the top of the sidebar
+    with calc_container:
+        st.subheader("📐 Calculated Squares")
+        st.info(f"**Area w/ Waste:** {b_sqs_waste:,.2f} SQ\n\n**Order SQ (Shingles):** {shingle_calc_sqs:,.2f} SQ")
 
 meas = {
     "base_squares": b_sqs_waste, 
